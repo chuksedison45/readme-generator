@@ -20,4 +20,15 @@ resource "aws_bedrockagent_agent_action_group" "this" {
   api_schema {
     payload = file("${path.root}/repo_scanner_schema.json")
   }
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<EOT
+      aws bedrock-agent update-agent-action-group \
+        --agent-id ${self.agent_id} \
+        --agent-version "DRAFT" \
+        --action-group-id ${self.action_group_id} \
+        --action-group-name ${self.action_group_name} \
+        --action-group-state "DISABLED"
+    EOT
+  }
 }
