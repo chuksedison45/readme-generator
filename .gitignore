@@ -27,3 +27,7 @@ dist/
 *.exe
 *.zip
 *.tar.gz
+*.tar
+*.bedrock_cache/
+*.bedrock_agents.json
+
