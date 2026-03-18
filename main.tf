@@ -21,6 +21,12 @@ resource "random_string" "suffix" {
   upper   = false
 }
 
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# ----------------------------------------------------------------------
+# S3 bucket for storing generated READMEs (optional)
+# ----------------------------------------------------------------------
 module "s3_bucket" {
   source      = "./modules/s3"
   bucket_name = "ed45-readme-generator-output-bucket-${random_string.suffix.result}"
@@ -37,6 +43,9 @@ module "lambda_execution_role" {
   ]
 }
 
+# ----------------------------------------------------------------------
+# IAM role for Bedrock Agents (assumed by the agents)
+# ----------------------------------------------------------------------
 # Role specifically for the Bedrock Agent to use
 module "bedrock_agent_role" {
   source             = "./modules/iam"
@@ -59,6 +68,9 @@ data "archive_file" "repo_scanner_zip" {
   output_path = "${path.root}/dist/repo_scanner.zip"
 }
 
+# ----------------------------------------------------------------------
+# Lambda function for the Repo Scanner tool
+# ----------------------------------------------------------------------
 resource "aws_lambda_function" "repo_scanner_lambda" {
   function_name    = "ed45-RepoScannerTool"
   role             = module.lambda_execution_role.role_arn # Uses the dedicated Lambda role
@@ -72,26 +84,15 @@ resource "aws_lambda_function" "repo_scanner_lambda" {
   layers = ["arn:aws:lambda:us-east-1:553035198032:layer:git-lambda2:8"]
 }
 
-module "repo_scanner_agent" {
-  source                  = "./modules/bedrock_agent"
-  agent_name              = "ed45-Repo_Scanner_Agent"
-  agent_resource_role_arn = module.bedrock_agent_role.role_arn # Uses the dedicated Bedrock role
-  instruction             = "Your job is to use the scan_repo tool to get a file list from a public GitHub URL. You are a helpful AI assistant. When a user provides a GitHub URL, you must use the available tool to scan it."
-}
 
-resource "aws_bedrockagent_agent_action_group" "repo_scanner_action_group" {
-  agent_id           = module.repo_scanner_agent.agent_id
-  agent_version      = "DRAFT"
-  action_group_name  = "ScanRepoAction"
-  action_group_state = "ENABLED"
+module "all_agents" {
+  source   = "./modules/bedrock_agent"
+  for_each = local.agents
 
-  action_group_executor {
-    lambda = aws_lambda_function.repo_scanner_lambda.arn
-  }
-
-  api_schema {
-    payload = file("${path.root}/repo_scanner_schema.json")
-  }
+  agent_name              = each.value.name
+  agent_resource_role_arn = module.bedrock_agent_role.role_arn
+  instruction             = each.value.instruction
+  action_group_uri        = try(each.value.action_group_uri, null)
 }
 
 # This resource grants the Bedrock Agent permission to invoke our Lambda function
@@ -100,38 +101,7 @@ resource "aws_lambda_permission" "allow_bedrock_to_invoke_lambda" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.repo_scanner_lambda.function_name
   principal     = "bedrock.amazonaws.com"
-  source_arn    = module.repo_scanner_agent.agent_arn
+  source_arn    = module.all_agents["repo_scanner"].agent_arn
 }
 
-module "project_summarizer_agent" {
-  source                  = "./modules/bedrock_agent"
-  agent_name              = "ed45-Project_Summarizer_Agent"
-  agent_resource_role_arn = module.bedrock_agent_role.role_arn
-  instruction             = <<-EOT
-    You are an expert software developer. Your ONLY task is to analyze the following list of filenames and write a single, concise paragraph summarizing the project's likely purpose.
-    Infer the main programming language and potential frameworks from file extensions and common project file names (e.g., 'pom.xml' implies Java/Maven, 'package.json' implies Node.js).
-    Do not add any preamble or extra text. Only provide the summary paragraph.
-  EOT
-}
 
-module "installation_guide_agent" {
-  source                  = "./modules/bedrock_agent"
-  agent_name              = "ed45-Installation_Guide_Agent"
-  agent_resource_role_arn = module.bedrock_agent_role.role_arn
-  instruction             = <<-EOT
-    You are a technical writer. Your ONLY job is to scan the provided list of filenames.
-    If you see a common dependency file like 'requirements.txt', 'package.json', 'pom.xml', or 'go.mod', write a '## Getting Started' section in Markdown that includes the standard command to install dependencies for that file type.
-    If you do not see any recognizable dependency files, respond with the exact text: 'No dependency management file found.'
-  EOT
-}
-
-module "usage_examples_agent" {
-  source                  = "./modules/bedrock_agent"
-  agent_name              = "ed45-Usage_Examples_Agent"
-  agent_resource_role_arn = module.bedrock_agent_role.role_arn
-  instruction             = <<-EOT
-    You are a software developer. Your ONLY task is to look at the list of filenames and identify the most likely main script or entry point (e.g., 'main.py', 'index.js', 'app.py').
-    Write a '## Usage' section in Markdown that shows a common command to run the project.
-    For example, if you see 'main.py', suggest 'python main.py'.
-  EOT
-}

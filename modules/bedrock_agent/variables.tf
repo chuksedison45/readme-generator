@@ -18,3 +18,8 @@ variable "agent_resource_role_arn" {
   description = "The ARN of the IAM role for the agent."
   type        = string
 }
+variable "action_group_uri" {
+  description = "ARN of the Lambda function to use as an action group (optional)"
+  type        = string
+  default     = null
+}
